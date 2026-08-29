@@ -40,6 +40,7 @@ dependencies:
   intl: ^0.19.0
   flutter_local_notifications: ^17.2.3
   timezone: ^0.9.4
+  purchases_flutter: ^10.10.1
 
 dev_dependencies:
   flutter_test:

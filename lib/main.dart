@@ -3,6 +3,7 @@ import 'package:intl/date_symbol_data_local.dart';
 import 'screens/home_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'services/notification_service.dart';
+import 'services/purchase_service.dart';
 import 'services/storage_service.dart';
 import 'theme/app_theme.dart';
 
@@ -10,6 +11,7 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await initializeDateFormatting('ja_JP');
   final storage = await StorageService.load();
+  await PurchaseService.init(storage);
 
   final notifications = NotificationService();
   await notifications.init();

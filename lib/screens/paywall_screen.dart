@@ -1,10 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:purchases_flutter/purchases_flutter.dart';
+
+import '../services/purchase_service.dart';
 import '../services/storage_service.dart';
 import '../theme/app_theme.dart';
 import 'home_screen.dart';
 
-/// RevenueCat課金フローのローカルスタブ。
-/// 本物のストア決済は接続していない。タップでisProフラグをONにするのみ。
+/// Pro購入画面。
+///
+/// RevenueCatが構成済み（APIキーあり・Offering取得成功）なら実際の商品を表示し、
+/// `Purchases.purchase` でGoogle Playの決済フローを起動する。
+/// 未構成なら固定表示のスタブプランにフォールバックする。
 class PaywallScreen extends StatefulWidget {
   const PaywallScreen({
     super.key,
@@ -20,8 +26,38 @@ class PaywallScreen extends StatefulWidget {
 }
 
 class _PaywallScreenState extends State<PaywallScreen> {
-  bool _purchasing = false;
-  bool _annual = true;
+  final PurchaseService _purchases = PurchaseService.instance;
+
+  bool _loading = true;
+  bool _busy = false;
+  Offering? _offering;
+  Package? _selected;
+
+  /// スタブ表示時にAnnualを選んでいるか。
+  bool _stubAnnual = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadOffering();
+  }
+
+  Future<void> _loadOffering() async {
+    final offering = await _purchases.fetchCurrentOffering();
+    if (!mounted) return;
+    setState(() {
+      _offering = offering;
+      // 年額があれば初期選択にする。無ければ先頭。
+      final packages = offering?.availablePackages ?? const <Package>[];
+      if (packages.isNotEmpty) {
+        _selected = packages.firstWhere(
+          (p) => p.packageType == PackageType.annual,
+          orElse: () => packages.first,
+        );
+      }
+      _loading = false;
+    });
+  }
 
   void _goHome() {
     Navigator.of(context).pushAndRemoveUntil(
@@ -30,17 +66,35 @@ class _PaywallScreenState extends State<PaywallScreen> {
     );
   }
 
-  Future<void> _purchase() async {
-    setState(() => _purchasing = true);
-    await Future.delayed(const Duration(milliseconds: 900)); // 決済処理を模擬
-    await widget.storage.setIsPro(true);
+  Future<void> _runPurchaseFlow(Future<PurchaseOutcome> Function() action) async {
+    setState(() => _busy = true);
+    final outcome = await action();
     if (!mounted) return;
-    setState(() => _purchasing = false);
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Pro購入完了（サンドボックス）')),
-    );
-    _goHome();
+    setState(() => _busy = false);
+
+    switch (outcome) {
+      case PurchaseOutcome.success:
+        _showMessage(_purchases.isLive ? 'Proが有効になった' : 'Pro購入完了（スタブ）');
+        _goHome();
+      case PurchaseOutcome.cancelled:
+        // ユーザーが自分で閉じた場合は何も出さない。
+        break;
+      case PurchaseOutcome.failed:
+        _showMessage('購入を完了できなかった。時間をおいて試すこと。');
+    }
   }
+
+  void _showMessage(String text) {
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  /// 選択中のパッケージを購入する。
+  /// _selected がnullなのはRevenueCat未構成のスタブ表示時だけで、
+  /// その場合はPurchaseService側がスタブ経路に落とす。
+  Future<void> _buy() => _runPurchaseFlow(() => _purchases.purchase(_selected));
+
+  Future<void> _restore() => _runPurchaseFlow(_purchases.restore);
 
   void _skip() {
     if (widget.fromOnboarding) {
@@ -62,7 +116,7 @@ class _PaywallScreenState extends State<PaywallScreen> {
               Align(
                 alignment: Alignment.topRight,
                 child: TextButton(
-                  onPressed: _purchasing ? null : _skip,
+                  onPressed: _busy ? null : _skip,
                   child: Text(
                     widget.fromOnboarding ? 'Freeで始める' : '閉じる',
                     style: const TextStyle(color: AppColors.textSecondary),
@@ -70,7 +124,8 @@ class _PaywallScreenState extends State<PaywallScreen> {
                 ),
               ),
               const SizedBox(height: 8),
-              const Icon(Icons.auto_awesome, color: AppColors.cyberGold, size: 48),
+              const Icon(Icons.auto_awesome,
+                  color: AppColors.cyberGold, size: 48),
               const SizedBox(height: 16),
               Text(
                 'AstroQuest Pro',
@@ -91,31 +146,24 @@ class _PaywallScreenState extends State<PaywallScreen> {
               const _FeatureRow(text: 'Streak全履歴の閲覧'),
               const _FeatureRow(text: 'Freeの全機能'),
               const SizedBox(height: 24),
-              _PlanTile(
-                title: 'Annual',
-                price: '\$29.99 / 年',
-                subtitle: '\$2.50/月換算・7日間無料体験',
-                selected: _annual,
-                onTap: () => setState(() => _annual = true),
-              ),
-              const SizedBox(height: 12),
-              _PlanTile(
-                title: 'Monthly',
-                price: '\$4.99 / 月',
-                subtitle: '7日間無料体験',
-                selected: !_annual,
-                onTap: () => setState(() => _annual = false),
-              ),
-              const Spacer(),
+              Expanded(child: _buildPlans()),
               ElevatedButton(
-                onPressed: _purchasing ? null : _purchase,
-                child: _purchasing
+                onPressed: _busy || _loading ? null : _buy,
+                child: _busy
                     ? const SizedBox(
                         height: 20,
                         width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white),
                       )
                     : const Text('無料体験を始める'),
+              ),
+              TextButton(
+                onPressed: _busy ? null : _restore,
+                child: const Text(
+                  '購入を復元',
+                  style: TextStyle(color: AppColors.textSecondary),
+                ),
               ),
             ],
           ),
@@ -123,6 +171,94 @@ class _PaywallScreenState extends State<PaywallScreen> {
       ),
     );
   }
+
+  Widget _buildPlans() {
+    if (_loading) {
+      return const Center(
+        child: CircularProgressIndicator(color: AppColors.neonPurple),
+      );
+    }
+
+    final packages = _offering?.availablePackages;
+    if (packages == null || packages.isEmpty) {
+      // RevenueCat未構成 or 商品未設定。表示だけの固定プランに落とす。
+      return ListView(
+        padding: EdgeInsets.zero,
+        children: [
+          _PlanTile(
+            title: 'Annual',
+            price: '\$29.99 / 年',
+            subtitle: '\$2.50/月換算・7日間無料体験',
+            selected: _stubAnnual,
+            onTap: () => setState(() => _stubAnnual = true),
+          ),
+          const SizedBox(height: 12),
+          _PlanTile(
+            title: 'Monthly',
+            price: '\$4.99 / 月',
+            subtitle: '7日間無料体験',
+            selected: !_stubAnnual,
+            onTap: () => setState(() => _stubAnnual = false),
+          ),
+        ],
+      );
+    }
+
+    return ListView.separated(
+      padding: EdgeInsets.zero,
+      itemCount: packages.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 12),
+      itemBuilder: (context, i) {
+        final package = packages[i];
+        return _PlanTile(
+          title: _planTitle(package.packageType),
+          price: package.storeProduct.priceString,
+          subtitle: _planSubtitle(package),
+          selected: _selected?.identifier == package.identifier,
+          onTap: () => setState(() => _selected = package),
+        );
+      },
+    );
+  }
+
+  String _planTitle(PackageType type) => switch (type) {
+        PackageType.annual => 'Annual',
+        PackageType.sixMonth => '6ヶ月',
+        PackageType.threeMonth => '3ヶ月',
+        PackageType.twoMonth => '2ヶ月',
+        PackageType.monthly => 'Monthly',
+        PackageType.weekly => 'Weekly',
+        PackageType.lifetime => '買い切り',
+        _ => 'プラン',
+      };
+
+  /// 無料体験・月額換算などの補足行。取れた情報だけを出す。
+  String _planSubtitle(Package package) {
+    final product = package.storeProduct;
+    final parts = <String>[];
+
+    final intro = product.introductoryPrice;
+    if (intro != null && intro.price == 0) {
+      parts.add('${intro.periodNumberOfUnits}${_unitLabel(intro.periodUnit)}無料体験');
+    } else if (intro != null) {
+      parts.add('初回 ${intro.priceString}');
+    }
+
+    if (package.packageType == PackageType.annual &&
+        product.pricePerMonthString != null) {
+      parts.add('${product.pricePerMonthString}/月換算');
+    }
+
+    return parts.isEmpty ? product.description : parts.join('・');
+  }
+
+  String _unitLabel(PeriodUnit unit) => switch (unit) {
+        PeriodUnit.day => '日間',
+        PeriodUnit.week => '週間',
+        PeriodUnit.month => 'ヶ月',
+        PeriodUnit.year => '年',
+        PeriodUnit.unknown => '',
+      };
 }
 
 class _FeatureRow extends StatelessWidget {
@@ -187,12 +323,17 @@ class _PlanTile extends StatelessWidget {
                 children: [
                   Text(title,
                       style: const TextStyle(
-                          color: AppColors.textPrimary, fontWeight: FontWeight.bold)),
-                  Text(subtitle, style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                          color: AppColors.textPrimary,
+                          fontWeight: FontWeight.bold)),
+                  Text(subtitle,
+                      style: const TextStyle(
+                          color: AppColors.textSecondary, fontSize: 12)),
                 ],
               ),
             ),
-            Text(price, style: const TextStyle(color: AppColors.cyberGold, fontWeight: FontWeight.bold)),
+            Text(price,
+                style: const TextStyle(
+                    color: AppColors.cyberGold, fontWeight: FontWeight.bold)),
           ],
         ),
       ),

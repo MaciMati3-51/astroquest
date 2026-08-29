@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../data/content_pool.dart';
 import '../models/cosmic_element.dart';
 import '../models/quest.dart';
+import '../services/purchase_service.dart';
 import '../services/storage_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/gradient_card.dart';
@@ -18,6 +19,24 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // RevenueCat側で権限が変わったとき（購入・復元・失効）に再描画する。
+    // Paywallから戻る経路とは別に、非同期で飛んでくる更新を拾うため。
+    PurchaseService.instance.proChanged.addListener(_onProChanged);
+  }
+
+  @override
+  void dispose() {
+    PurchaseService.instance.proChanged.removeListener(_onProChanged);
+    super.dispose();
+  }
+
+  void _onProChanged() {
+    if (mounted) setState(() {});
+  }
+
   Future<void> _openQuest(QuestDef quest, String buffName) async {
     await Navigator.of(context).push(
       MaterialPageRoute(
